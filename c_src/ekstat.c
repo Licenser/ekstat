@@ -163,7 +163,39 @@ new_selector(ks_returner_t *ret)
 	selector->ks_name.pstr = "*";
 	selector->ks_statistic.pstr = "*";
 
+	selector->ks_class.free = B_FALSE;
+	selector->ks_module.free = B_FALSE;
+	selector->ks_instance.free = B_FALSE;
+	selector->ks_name.free = B_FALSE;
+	selector->ks_statistic.free = B_FALSE;
+
 	return (selector);
+}
+
+static void
+free_pattern(ks_pattern_t *pattern)
+{
+	if (pattern == NULL) {
+		return;
+	}
+	if (pattern->pstr != NULL) {
+		if (pattern->free == B_TRUE) {
+			free(pattern->pstr);
+		}
+		pattern->pstr = NULL;
+	}
+	(void) regfree(&pattern->preg);
+}
+
+static void
+free_selector(ks_selector_t *selector)
+{
+	(void) free_pattern(&selector->ks_class);
+	(void) free_pattern(&selector->ks_module);
+	(void) free_pattern(&selector->ks_instance);
+	(void) free_pattern(&selector->ks_name);
+	(void) free_pattern(&selector->ks_statistic);
+	free(selector);
 }
 
 /*
@@ -229,15 +261,21 @@ ks_match(ks_returner_t *ret, const char *str, ks_pattern_t *pattern)
 				if (errbuf == NULL) {
 					ret->term = EKSTAT_ERROR("regex buffer malloc");
 					ret->ready = B_TRUE;
+					free(pattern->pstr);
+					pattern->pstr = NULL;
 					return B_FALSE;
 				}
 				(void) regerror(regcode, NULL, errbuf, bufsz);
 				ret->term = EKSTAT_ERROR(errbuf);
 				ret->ready = B_TRUE;
+				free(errbuf);
 			}
+			free(pattern->pstr);
+			pattern->pstr = NULL;
 			return B_FALSE;
 		}
 
+		free(pattern->pstr);
 		pattern->pstr = NULL;
 	}
 
@@ -889,6 +927,11 @@ ks_selector_arg(ks_returner_t *ret, ks_pattern_t *pattern, ERL_NIF_TERM arg)
 		if (enif_is_atom(ret->env, arg)) {
 			enif_get_atom_length(ret->env, arg, &size, ERL_NIF_LATIN1);
 			string = (char *)(malloc(sizeof (char) * (size + 1)));
+			if (string == NULL) {
+				ret->term = EKSTAT_ERROR("atom malloc");
+				ret->ready = B_TRUE;
+				return;
+			}
 			result = enif_get_atom(ret->env, arg, string, size + 1, ERL_NIF_LATIN1);
 			if (result == 0) {
 				ret->term = enif_make_badarg(ret->env);
@@ -896,6 +939,7 @@ ks_selector_arg(ks_returner_t *ret, ks_pattern_t *pattern, ERL_NIF_TERM arg)
 			} else {
 				if (strncmp(string, "_", result) == 0) {
 					pattern->pstr = "*";
+					pattern->free = B_FALSE;
 				} else {
 					ret->term = enif_make_badarg(ret->env);
 					ret->ready = B_TRUE;
@@ -905,18 +949,25 @@ ks_selector_arg(ks_returner_t *ret, ks_pattern_t *pattern, ERL_NIF_TERM arg)
 		} else if (enif_is_list(ret->env, arg)) {
 			enif_get_list_length(ret->env, arg, &size);
 			string = (char *)(malloc(sizeof (char) * (size + 1)));
+			if (string == NULL) {
+				ret->term = EKSTAT_ERROR("list malloc");
+				ret->ready = B_TRUE;
+				return;
+			}
 			result = enif_get_string(ret->env, arg, string, size + 1, ERL_NIF_LATIN1);
 			if (result == 0) {
 				ret->term = enif_make_badarg(ret->env);
 				ret->ready = B_TRUE;
 			} else {
-				pattern->pstr = (char *)ks_safe_strdup(ret, string);
+				pattern->pstr = (char *)(ks_safe_strdup(ret, string));
+				pattern->free = B_TRUE;
 			}
 			free(string);
 		} else if (enif_is_number(ret->env, arg)) {
 			if (enif_get_int64(ret->env, arg, &integer)) {
 				(void) asprintf(&string, "%d", integer);
-				pattern->pstr = (char *)ks_safe_strdup(ret, string);
+				pattern->pstr = (char *)(ks_safe_strdup(ret, string));
+				pattern->free = B_TRUE;
 			} else {
 				ret->term = enif_make_badarg(ret->env);
 				ret->ready = B_TRUE;
@@ -1163,7 +1214,7 @@ read_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	if (ret->ready == B_TRUE) {
 		if ((void *)(selector) != NULL) {
-			free(selector);
+			free_selector(selector);
 		}
 		return EKSTAT_RETURN(ret->term);
 	}
@@ -1199,7 +1250,7 @@ read_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	}
 
 	if (ret->ready == B_TRUE) {
-		free(selector);
+		free_selector(selector);
 		return EKSTAT_RETURN(ret->term);
 	}
 
@@ -1219,7 +1270,7 @@ read_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		) {
 			free(ks_number);
 			if (ret->ready == B_TRUE) {
-				free(selector);
+				free_selector(selector);
 				return EKSTAT_RETURN(ret->term);
 			}
 			continue;
@@ -1231,7 +1282,7 @@ read_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		for (nvpair = list_head(&ksi->ks_nvlist); nvpair != NULL; nvpair = list_next(&ksi->ks_nvlist, nvpair)) {
 			if (!ks_match(ret, nvpair->name, &selector->ks_statistic)) {
 				if (ret->ready == B_TRUE) {
-					free(selector);
+					free_selector(selector);
 					return EKSTAT_RETURN(ret->term);
 				}
 				continue;
@@ -1250,7 +1301,7 @@ read_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		}
 	}
 
-	free(selector);
+	free_selector(selector);
 
 	return EKSTAT_RETURN(term);
 }

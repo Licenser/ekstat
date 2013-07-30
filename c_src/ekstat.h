@@ -177,6 +177,7 @@ typedef struct ks_nvpair {
 } ks_nvpair_t;
 
 typedef struct ks_pattern {
+	boolean_t	free;
 	char		*pstr;
 	regex_t		preg;
 } ks_pattern_t;
@@ -200,6 +201,8 @@ static int	compare_instances(ks_instance_t *, ks_instance_t *);
 static char	*ks_safe_strdup(ks_returner_t *, char *);
 static boolean_t	ks_match(ks_returner_t *, const char *, ks_pattern_t *);
 static ks_selector_t	*new_selector(ks_returner_t *);
+static void	free_pattern(ks_pattern_t *);
+static void	free_selector(ks_selector_t *);
 
 /* Raw kstat readers */
 static void	save_cpu_stat(ks_returner_t *, kstat_t *, ks_instance_t *);
