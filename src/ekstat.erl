@@ -6,7 +6,8 @@
          read/2,
          read/3,
          read/4,
-         read/5
+         read/5,
+         read/6
         ]).
 
 -on_load(init/0).
@@ -17,7 +18,7 @@
 -type kstat_statistic() :: {Statistic::string(), Value::integer()} |
                            {Statistic::string(), Value::string()}.
 
--type kstat_row() :: {Module::string(), Class::string(), Name::string(), [kstat_statistic()]}.
+-type kstat_row() :: {Class::string(), Module::string(), Instance::integer(), Name::string(), [kstat_statistic()]}.
 
 init() ->
     PrivDir = case code:priv_dir(?MODULE) of
@@ -63,4 +64,9 @@ read(_Handle, _Class, _Module, _Instance) ->
 -spec read(Handle::binary(), Class::string(), Module::string(), Instance::integer(), Name::string()) -> [kstat_row()].
 
 read(_Handle, _Class, _Module, _Instance, _Name) ->
+    exit(nif_library_not_loaded).
+
+-spec read(Handle::binary(), Class::string(), Module::string(), Instance::integer(), Name::string(), Statistic::string()) -> [kstat_row()].
+
+read(_Handle, _Class, _Module, _Instance, _Name, _Statistic) ->
     exit(nif_library_not_loaded).
