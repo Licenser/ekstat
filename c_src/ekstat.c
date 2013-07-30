@@ -932,7 +932,7 @@ ks_selector_arg(ks_returner_t *ret, ks_pattern_t *pattern, ERL_NIF_TERM arg)
 /*
  * Erlang NIF functions
  */
-ErlNifResourceType *kstat_handle;
+ErlNifResourceType	*kstat_handle;
 
 static int
 load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
@@ -1256,14 +1256,47 @@ read_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
-pagesize_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+clear_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	ks_returner_t	*ret;
-	ERL_NIF_TERM	pagesize;
+	ks_handle_t	*handle;
+	ks_instance_t	*ksi, *ktmp;
+	ks_nvpair_t	*nvpair, *ntmp;
+	int		count = 0;
 
 	ret = new_returner(env);
-	pagesize = EKSTAT_OK(EKSTAT_INT(getpagesize()));
-	return EKSTAT_RETURN(pagesize);
+
+	if (argc < 1) {
+		return EKSTAT_RETURN(enif_make_badarg(ret->env));
+	}
+
+	if (!enif_get_resource(env, argv[0], kstat_handle, (void **)(&handle))) {
+		return EKSTAT_RETURN(enif_make_badarg(ret->env));
+	}
+
+	/* Free the instances list */
+	ksi = list_head(&handle->instances_list);
+	while (ksi != NULL) {
+		nvpair = list_head(&ksi->ks_nvlist);
+		while (nvpair != NULL) {
+			ntmp = nvpair;
+			nvpair = list_next(&ksi->ks_nvlist, nvpair);
+			list_remove(&ksi->ks_nvlist, ntmp);
+			if (ntmp->data_type == KSTAT_DATA_STRING)
+				free(ntmp->value.str.addr.ptr);
+			free(ntmp);
+		}
+
+		ktmp = ksi;
+		ksi = list_next(&handle->instances_list, ksi);
+		list_remove(&handle->instances_list, ktmp);
+		list_destroy(&ktmp->ks_nvlist);
+		free(ktmp);
+
+		count++;
+	}
+
+	return EKSTAT_RETURN(EKSTAT_OK(EKSTAT_INT(count)));
 }
 
 ERL_NIF_INIT(ekstat, nif_funcs, *load, NULL, *upgrade, NULL);

@@ -282,7 +282,7 @@ typedef struct ks_handle_t {
 #define EKSTAT_UINT(A)			enif_make_uint(ret->env, A)
 #define EKSTAT_UINT64(A)		enif_make_uint64(ret->env, A)
 
-#define EKSTAT_ERROR(A)			EKSTAT_TUPLE2(EKSTAT_ATOM("error"), EKSTAT_STRING(A))
+#define EKSTAT_ERROR(A)			EKSTAT_TUPLE2(EKSTAT_ATOM("error"), EKSTAT_TUPLE2(EKSTAT_ATOM("kstat"), EKSTAT_STRING(A)))
 #define EKSTAT_OK(A)			EKSTAT_TUPLE2(EKSTAT_ATOM("ok"), A)
 #define EKSTAT_RETURN(A)		ks_returner_term(ret, A)
 
@@ -293,7 +293,7 @@ static int	upgrade(ErlNifEnv *, void **, void **, ERL_NIF_TERM);
 static ERL_NIF_TERM	open_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
 static ERL_NIF_TERM	update_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
 static ERL_NIF_TERM	read_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
-static ERL_NIF_TERM	pagesize_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
+static ERL_NIF_TERM	clear_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
 
 static ErlNifFunc	nif_funcs[] = {
 	{"open", 0, open_nif},
@@ -304,7 +304,7 @@ static ErlNifFunc	nif_funcs[] = {
 	{"read", 4, read_nif},
 	{"read", 5, read_nif},
 	{"read", 6, read_nif},
-	{"pagesize", 0, pagesize_nif}
+	{"clear", 1, clear_nif}
 };
 
 #endif /* _STAT_EKSTAT_H */

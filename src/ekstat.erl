@@ -1,26 +1,62 @@
 -module(ekstat).
 
--export([open/0,
-         update/1,
-         read/1,
-         read/2,
-         read/3,
-         read/4,
-         read/5,
-         read/6,
-         pagesize/0
-        ]).
+%% API
+-export([open/0, update/1, read/1, read/2, read/3, read/4, read/5, read/6, clear/1]).
 
 -on_load(init/0).
 
+%% Types
 -type kstat_handle() :: binary().
 -type kstat_error() :: {error, {kstat, string()}}.
-
--type kstat_statistic() :: {Statistic::string(), Value::integer()} |
-                           {Statistic::string(), Value::string()}.
-
+-type kstat_statistic() :: {Statistic::string(), Value::integer()} | {Statistic::string(), Value::string()}.
 -type kstat_row() :: {Class::string(), Module::string(), Instance::integer(), Name::string(), [kstat_statistic()]}.
 
+%%%===================================================================
+%%% API functions
+%%%===================================================================
+
+-spec open() -> {ok, Handle::kstat_handle()} | kstat_error().
+open() ->
+    erlang:nif_error(undefined).
+
+-spec update(Handle::binary()) -> [kstat_row()] | kstat_error().
+update(_Handle) ->
+    erlang:nif_error(undefined).
+
+-spec read(Handle::binary()) -> [kstat_row()] | kstat_error().
+read(_Handle) ->
+    erlang:nif_error(undefined).
+
+-spec read(Handle::binary(), Class::string()) -> [kstat_row()] | kstat_error().
+read(_Handle, _Class) ->
+    erlang:nif_error(undefined).
+
+-spec read(Handle::binary(), Class::string(), Module::string()) -> [kstat_row()] | kstat_error().
+read(_Handle, _Class, _Module) ->
+    erlang:nif_error(undefined).
+
+-spec read(Handle::binary(), Class::string(), Module::string(), Instance::integer()) -> [kstat_row()] | kstat_error().
+read(_Handle, _Class, _Module, _Instance) ->
+    erlang:nif_error(undefined).
+
+-spec read(Handle::binary(), Class::string(), Module::string(), Instance::integer(), Name::string()) -> [kstat_row()] | kstat_error().
+read(_Handle, _Class, _Module, _Instance, _Name) ->
+    erlang:nif_error(undefined).
+
+-spec read(Handle::binary(), Class::string(), Module::string(), Instance::integer(), Name::string(), Statistic::string()) -> [kstat_row()] | kstat_error().
+read(_Handle, _Class, _Module, _Instance, _Name, _Statistic) ->
+    erlang:nif_error(undefined).
+
+-spec clear(Handle::binary()) -> [kstat_row()] | kstat_error().
+clear(_Handle) ->
+    erlang:nif_error(undefined).
+
+%%%-------------------------------------------------------------------
+%%% Internal functions
+%%%-------------------------------------------------------------------
+
+%% @private
+-spec init() -> ok | {error, {Reason::load_failed | bad_lib | load | reload | upgrade | old_code, Text::string()}}.
 init() ->
     PrivDir = case code:priv_dir(?MODULE) of
                   {error, _} ->
@@ -32,57 +68,17 @@ init() ->
               end,
     erlang:load_nif(filename:join(PrivDir, "ekstat_drv"), 0).
 
--spec open() -> {ok, Handle::kstat_handle()} |
-                kstat_error().
-open() ->
-    exit(nif_library_not_loaded).
-
--spec update(Handle::binary()) -> [kstat_row()].
-
-update(_Handle) ->
-    exit(nif_library_not_loaded).
-
--spec read(Handle::binary()) -> [kstat_row()].
-
-read(_Handle) ->
-    exit(nif_library_not_loaded).
-
--spec read(Handle::binary(), Class::string()) -> [kstat_row()].
-
-read(_Handle, _Class) ->
-    exit(nif_library_not_loaded).
-
--spec read(Handle::binary(), Class::string(), Module::string()) -> [kstat_row()].
-
-read(_Handle, _Class, _Module) ->
-    exit(nif_library_not_loaded).
-
--spec read(Handle::binary(), Class::string(), Module::string(), Instance::integer()) -> [kstat_row()].
-
-read(_Handle, _Class, _Module, _Instance) ->
-    exit(nif_library_not_loaded).
-
--spec read(Handle::binary(), Class::string(), Module::string(), Instance::integer(), Name::string()) -> [kstat_row()].
-
-read(_Handle, _Class, _Module, _Instance, _Name) ->
-    exit(nif_library_not_loaded).
-
--spec read(Handle::binary(), Class::string(), Module::string(), Instance::integer(), Name::string(), Statistic::string()) -> [kstat_row()].
-
-read(_Handle, _Class, _Module, _Instance, _Name, _Statistic) ->
-    exit(nif_library_not_loaded).
-
--spec pagesize() -> {ok, Pagesize::integer()}.
-pagesize() ->
-    exit(nif_library_not_loaded).
-
 %% Tests.
 
 -ifdef(TEST).
 
-pagesize_test() ->
-    Result = os:cmd("/usr/bin/pagesize"),
-    {Pagesize, _} = string:to_integer(Result),
-    {ok, Pagesize} = ekstat:pagesize().
+sanity_test() ->
+    {ok, Handle} = ekstat:open(),
+    [] = ekstat:read(Handle),
+    {ok, Number} = ekstat:update(Handle),
+    Number = length(ekstat:read(Handle)),
+    {ok, Number} = ekstat:clear(Handle),
+    {ok, 0} = ekstat:clear(Handle),
+    ok.
 
 -endif.
