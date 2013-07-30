@@ -256,6 +256,9 @@ static kstat_raw_reader_t	lookup_raw_kstat_fn(char *, char *);
 
 static ERL_NIF_TERM	ks_nvpair_term(ks_returner_t *, ks_nvpair_t *);
 static ERL_NIF_TERM	ks_instance_term(ks_returner_t *, ks_instance_t *, ERL_NIF_TERM);
+static ks_returner_t	*new_returner(ErlNifEnv *);
+static ERL_NIF_TERM	ks_returner_term(ks_returner_t *, ERL_NIF_TERM);
+static void		ks_selector_arg(ks_returner_t *, ks_pattern_t *, ERL_NIF_TERM);
 
 /*
  * Erlang NIF functions
@@ -285,10 +288,12 @@ typedef struct ks_handle_t {
 
 static void	handle_dtor(ErlNifEnv *, void *);
 static int	load(ErlNifEnv *, void **, ERL_NIF_TERM);
+static int	upgrade(ErlNifEnv *, void **, void **, ERL_NIF_TERM);
 
 static ERL_NIF_TERM	open_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
 static ERL_NIF_TERM	update_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
 static ERL_NIF_TERM	read_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
+static ERL_NIF_TERM	pagesize_nif(ErlNifEnv *, int, const ERL_NIF_TERM[]);
 
 static ErlNifFunc	nif_funcs[] = {
 	{"open", 0, open_nif},
@@ -298,7 +303,8 @@ static ErlNifFunc	nif_funcs[] = {
 	{"read", 3, read_nif},
 	{"read", 4, read_nif},
 	{"read", 5, read_nif},
-	{"read", 6, read_nif}
+	{"read", 6, read_nif},
+	{"pagesize", 0, pagesize_nif}
 };
 
 #endif /* _STAT_EKSTAT_H */

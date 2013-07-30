@@ -7,7 +7,8 @@
          read/3,
          read/4,
          read/5,
-         read/6
+         read/6,
+         pagesize/0
         ]).
 
 -on_load(init/0).
@@ -70,3 +71,18 @@ read(_Handle, _Class, _Module, _Instance, _Name) ->
 
 read(_Handle, _Class, _Module, _Instance, _Name, _Statistic) ->
     exit(nif_library_not_loaded).
+
+-spec pagesize() -> {ok, Pagesize::integer()}.
+pagesize() ->
+    exit(nif_library_not_loaded).
+
+%% Tests.
+
+-ifdef(TEST).
+
+pagesize_test() ->
+    Result = os:cmd("/usr/bin/pagesize"),
+    {Pagesize, _} = string:to_integer(Result),
+    {ok, Pagesize} = ekstat:pagesize().
+
+-endif.

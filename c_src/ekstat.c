@@ -949,6 +949,12 @@ load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
 	return 0;
 }
 
+static int
+upgrade(ErlNifEnv *env, void **priv_data, void **old_priv_data, ERL_NIF_TERM load_info)
+{
+	return 0;
+}
+
 static void
 handle_dtor(ErlNifEnv *env, void *handle)
 {
@@ -1246,7 +1252,18 @@ read_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	free(selector);
 
-	return term;
+	return EKSTAT_RETURN(term);
 }
 
-ERL_NIF_INIT(ekstat, nif_funcs, *load, NULL, NULL, NULL);
+static ERL_NIF_TERM
+pagesize_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	ks_returner_t	*ret;
+	ERL_NIF_TERM	pagesize;
+
+	ret = new_returner(env);
+	pagesize = EKSTAT_OK(EKSTAT_INT(getpagesize()));
+	return EKSTAT_RETURN(pagesize);
+}
+
+ERL_NIF_INIT(ekstat, nif_funcs, *load, NULL, *upgrade, NULL);
