@@ -1,3 +1,7 @@
+## 0.2.1 - 30 July, 2013
+
+* Fixed memory leak with the `ks_selector_t` and `ks_pattern_t` part of the NIF.
+
 ## 0.2.0 - 30 July, 2013
 
 * Add `ekstat:read/6` and `ekstat:clear/1`.
