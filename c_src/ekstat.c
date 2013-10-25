@@ -852,7 +852,7 @@ save_timer(ks_returner_t *ret, kstat_t *kp, ks_instance_t *ksi)
 static ERL_NIF_TERM
 ks_nvpair_term(ks_returner_t *ret, ks_nvpair_t *nvpair)
 {
-	ERL_NIF_TERM	value;
+	ERL_NIF_TERM	value = 0;
 
 	switch (nvpair->data_type) {
 	case KSTAT_DATA_CHAR:
