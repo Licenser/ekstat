@@ -82,6 +82,19 @@ clear_ekstat_context(ekstat_context_t *context)
 }
 
 int
+update_ekstat_context(ekstat_context_t *context)
+{
+	kid_t	id;
+
+	id = kstat_chain_update(context->control);
+	if (id == -1) {
+		return (errno);
+	}
+
+	return (EKSTAT_OK);
+}
+
+int
 load_ekstat_context(ekstat_context_t *context)
 {
 	kstat_t			*kp;

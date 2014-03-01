@@ -136,6 +136,7 @@ struct ekstat_folder_s {
 
 extern ekstat_context_t		*new_ekstat_context(kstat_ctl_t *control);
 extern int			clear_ekstat_context(ekstat_context_t *context);
+extern int			update_ekstat_context(ekstat_context_t *context);
 extern int			load_ekstat_context(ekstat_context_t *context);
 extern int			fold_ekstat_context(ekstat_context_t *context, ekstat_folder_t *folder);
 extern void			free_ekstat_context(ekstat_context_t *context);

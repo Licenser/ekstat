@@ -39,6 +39,8 @@ ASYNC_NIF_INIT(ekstat);
 
 /* Atoms (initialized in on_load) */
 static ERL_NIF_TERM	ATOM_CLOSED;
+static ERL_NIF_TERM	ATOM_ENXIO;
+static ERL_NIF_TERM	ATOM_EOVERFLOW;
 
 /**
  * Opens a kstat control structure.
@@ -192,11 +194,35 @@ ASYNC_NIF_DECL(
 		(void) enif_keep_resource((void *)(args->handle));
 	},
 	{ // work
+		int	result;
+
 		if (!args->handle->rwlock) {
 			ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_CLOSED));
 			return;
 		}
 		(void) enif_rwlock_rwlock(args->handle->rwlock);
+		result = update_ekstat_context(args->handle->context);
+		if (result != EKSTAT_OK) {
+			(void) enif_rwlock_rwunlock(args->handle->rwlock);
+			switch (result) {
+			case EAGAIN:
+				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_EAGAIN));
+				break;
+			case ENOMEM:
+				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_ENOMEM));
+				break;
+			case ENXIO:
+				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_ENXIO));
+				break;
+			case EOVERFLOW:
+				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_EOVERFLOW));
+				break;
+			default:
+				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_ERROR));
+				break;
+			}
+			return;
+		}
 		(void) clear_ekstat_context(args->handle->context);
 		args->updated = load_ekstat_context(args->handle->context);
 		(void) enif_rwlock_rwunlock(args->handle->rwlock);
@@ -540,6 +566,8 @@ ekstat_load_nif(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
 	*priv_data = priv;
 
 	ATOM_CLOSED = enif_make_atom(env, "closed");
+	ATOM_ENXIO = enif_make_atom(env, "enxio");
+	ATOM_EOVERFLOW = enif_make_atom(env, "eoverflow");
 
 	flags = (ErlNifResourceFlags)(ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER);
 	ekstat_RESOURCE = enif_open_resource_type(
