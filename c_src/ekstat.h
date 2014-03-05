@@ -43,38 +43,27 @@
 #include <erl_driver.h>
 
 #include "common.h"
+#include "kstat_reader.h"
 
-#if !(__STDC_VERSION__ >= 199901L || defined(__GNUC__))
-# undef  DEBUG
-# define DEBUG		0
-# define DPRINTF	(void)	/* Vararg macros may be unsupported */
-#elif DEBUG
-#include <stdio.h>
-#include <stdarg.h>
-#define DPRINTF(fmt, ...)								\
-	do {										\
-		fprintf(stderr, "%s:%d " fmt "\n", __FILE__, __LINE__, __VA_ARGS__);    \
-		fflush(stderr);								\
-	} while(0)
-#define DPUTS(arg)		DPRINTF("%s", arg)
-#else
-#define DPRINTF(fmt, ...)	((void) 0)
-#define DPUTS(arg)		((void) 0)
-#endif
+#define EKSTAT_OK	0
 
 typedef struct ekstat_priv_data_s {
-	void			*async_nif_priv;	// Note: must be first element in struct
+	void		*async_nif_priv;	// Note: must be first element in struct
 } ekstat_priv_data_t;
 
 typedef struct ekstat_s {
-	ekstat_context_t	*context;
-	ErlNifRWLock		*rwlock;
+	kstat_reader_t	*reader;
+	ErlNifRWLock	*rwlock;
 } ekstat_t;
 
-static int	ekstat_read_prepare(ekstat_folder_t *folder);
-static int	ekstat_read_fold(ekstat_folder_t *folder, ks_nvpair_t *nvpair);
-static int	ekstat_read_finalize(ekstat_folder_t *folder, ks_instance_t *ksi);
+typedef struct ekstat_acc_s {
+	ERL_NIF_TERM	list;
+	ERL_NIF_TERM	statistics;
+	ks_instance_t	*ksi;
+} ekstat_acc_t;
 
-static int	parse_selector_pattern(ErlNifEnv *env, ERL_NIF_TERM arg, ks_pattern_t *pattern);
+extern char	*ekstat_strerror(int errnum);
+extern int	ekstat_folder(kstat_folder_t *folder, ks_instance_t *ksi, ks_nvpair_t *nvpair, void **accumulator);
+extern int	pattern_term_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr);
 
 #endif /* _EKSTAT_H */

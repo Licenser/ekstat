@@ -30,360 +30,72 @@
  */
 
 #include "ekstat.h"
-#include "async_nif.h"
 
-ErlNifResourceType	*ekstat_RESOURCE;
+static int	ekstat_folder_finalize(kstat_folder_t *folder, void **accumulator);
+static int	ekstat_folder_prepare(kstat_folder_t *folder, ks_instance_t *ksi, void **accumulator);
+static int	ekstat_folder_fold(kstat_folder_t *folder, ks_instance_t *ksi, ks_nvpair_t *nvpair, void **accumulator);
 
-/* Global init for async_nif. */
-ASYNC_NIF_INIT(ekstat);
+static int	pattern_atom_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr);
+static int	pattern_list_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr);
+static int	pattern_number_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr);
 
-/* Atoms (initialized in on_load) */
-static ERL_NIF_TERM	ATOM_CLOSED;
-static ERL_NIF_TERM	ATOM_ENXIO;
-static ERL_NIF_TERM	ATOM_EOVERFLOW;
-
-/**
- * Opens a kstat control structure.
- *
- */
-ASYNC_NIF_DECL(
-	ekstat_open,
-	{ // struct
-
-	},
-	{ // pre
-		UNUSED(argv);
-	},
-	{ // work
-		kstat_ctl_t	*control;
-		ekstat_t	*handle;
-		ERL_NIF_TERM	term;
-
-		while ((control = kstat_open()) == NULL) {
-			if (errno == EAGAIN) {
-				(void) poll(NULL, 0, 200);
-			} else {
-				(void) printf("ERROR\n");
-				return;
-			}
-		}
-
-		handle = (ekstat_t *)(enif_alloc_resource(ekstat_RESOURCE, sizeof(*handle)));
-		handle->rwlock = enif_rwlock_create("ekstat_handle");
-		(void) enif_rwlock_rwlock(handle->rwlock);
-		handle->context = new_ekstat_context(control);
-		term = enif_make_resource(env, handle);
-		(void) enif_release_resource(handle);
-		(void) enif_rwlock_rwunlock(handle->rwlock);
-
-		ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_OK, term));
-		return;
-	},
-	{ // post
-
-	}
-);
-
-/**
- * Closes a kstat control structure.
- *
- * argv[0]	reference to the kstat handle resource
- */
-ASYNC_NIF_DECL(
-	ekstat_close,
-	{ // struct
-		ekstat_t	*handle;
-	},
-	{ // pre
-		if (argc != 1) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		if (!enif_get_resource(env, argv[0], ekstat_RESOURCE, (void **)(&args->handle))) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		if (!args->handle->context) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		(void) enif_keep_resource((void *)(args->handle));
-	},
-	{ // work
-		if (!args->handle->rwlock) {
-			ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_CLOSED));
-			return;
-		}
-		(void) enif_rwlock_rwlock(args->handle->rwlock);
-		(void) kstat_close(args->handle->context->control);
-		args->handle->context->control = NULL;
-		(void) free_ekstat_context(args->handle->context);
-		args->handle->context = NULL;
-		(void) enif_rwlock_rwunlock(args->handle->rwlock);
-		(void) enif_rwlock_destroy(args->handle->rwlock);
-		args->handle->rwlock = NULL;
-
-		ASYNC_NIF_REPLY(ATOM_OK);
-		return;
-	},
-	{ // post
-		(void) enif_release_resource((void *)(args->handle));
-	}
-);
-
-/**
- * Clear a kstat control structure's statistics.
- *
- * argv[0]	reference to the kstat handle resource
- */
-ASYNC_NIF_DECL(
-	ekstat_clear,
-	{ // struct
-		ekstat_t	*handle;
-		unsigned int	cleared;
-	},
-	{ // pre
-		if (argc != 1) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		if (!enif_get_resource(env, argv[0], ekstat_RESOURCE, (void **)(&args->handle))) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		if (!args->handle->context) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		args->cleared = 0;
-		(void) enif_keep_resource((void *)(args->handle));
-	},
-	{ // work
-		if (!args->handle->rwlock) {
-			ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_CLOSED));
-			return;
-		}
-		(void) enif_rwlock_rwlock(args->handle->rwlock);
-		args->cleared = clear_ekstat_context(args->handle->context);
-		(void) enif_rwlock_rwunlock(args->handle->rwlock);
-
-		ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_OK, enif_make_uint(env, args->cleared)));
-		return;
-	},
-	{ // post
-		(void) enif_release_resource((void *)(args->handle));
-	}
-);
-
-/**
- * Update a kstat control structure's statistics.
- *
- * argv[0]	reference to the kstat handle resource
- */
-ASYNC_NIF_DECL(
-	ekstat_update,
-	{ // struct
-		ekstat_t	*handle;
-		unsigned int	updated;
-	},
-	{ // pre
-		if (argc != 1) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		if (!enif_get_resource(env, argv[0], ekstat_RESOURCE, (void **)(&args->handle))) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		if (!args->handle->context) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		args->updated = 0;
-		(void) enif_keep_resource((void *)(args->handle));
-	},
-	{ // work
-		int	result;
-
-		if (!args->handle->rwlock) {
-			ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_CLOSED));
-			return;
-		}
-		(void) enif_rwlock_rwlock(args->handle->rwlock);
-		result = update_ekstat_context(args->handle->context);
-		if (result != EKSTAT_OK) {
-			(void) enif_rwlock_rwunlock(args->handle->rwlock);
-			switch (result) {
-			case EAGAIN:
-				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_EAGAIN));
-				break;
-			case ENOMEM:
-				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_ENOMEM));
-				break;
-			case ENXIO:
-				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_ENXIO));
-				break;
-			case EOVERFLOW:
-				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_EOVERFLOW));
-				break;
-			default:
-				ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_ERROR));
-				break;
-			}
-			return;
-		}
-		(void) clear_ekstat_context(args->handle->context);
-		args->updated = load_ekstat_context(args->handle->context);
-		(void) enif_rwlock_rwunlock(args->handle->rwlock);
-
-		ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_OK, enif_make_uint(env, args->updated)));
-		return;
-	},
-	{ // post
-		(void) enif_release_resource((void *)(args->handle));
-	}
-);
-
-typedef struct ekstat_term_s {
-	ERL_NIF_TERM	term;
-} ekstat_term_t;
-
-/**
- * Read a kstat control structure's cached statistics.
- *
- * argv[0]	reference to the kstat handle resource
- * argv[1]	Class
- * argv[2]	Module
- * argv[3]	Instance
- * argv[4]	Name
- * argv[5]	Statistic
- */
-ASYNC_NIF_DECL(
-	ekstat_read,
-	{ // struct
-		ekstat_t	*handle;
-		ks_selector_t	*selector;
-	},
-	{ // pre
-		int		position;
-		int		result;
-		ks_pattern_t	*pattern;
-
-		if (argc < 1 || argc > 6) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		if (!enif_get_resource(env, argv[0], ekstat_RESOURCE, (void **)(&args->handle))) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-		if (!args->handle->context) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-
-		args->selector = new_ks_selector(args->handle->context);
-		if (args->selector == NULL) {
-			ASYNC_NIF_RETURN_BADARG();
-		}
-
-		position = 1;
-		while (argc > position) {
-			switch (position) {
-			case 1:
-				pattern = &args->selector->ks_class;
-				break;
-			case 2:
-				pattern = &args->selector->ks_module;
-				break;
-			case 3:
-				pattern = &args->selector->ks_instance;
-				break;
-			case 4:
-				pattern = &args->selector->ks_name;
-				break;
-			case 5:
-				pattern = &args->selector->ks_statistic;
-				break;
-			default:
-				ASYNC_NIF_RETURN_BADARG();
-			}
-
-			result = parse_selector_pattern(env, argv[position], pattern);
-			if (result != EKSTAT_OK) {
-				(void) free_ks_selector(args->selector);
-				if (result == EKSTAT_ENOMEM) {
-					return enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
-				} else {
-					ASYNC_NIF_RETURN_BADARG();
-				}
-			}
-			position++;
-		}
-		(void) enif_keep_resource((void *)(args->handle));
-	},
-	{ // work
-		ekstat_folder_t	folder;
-		ekstat_term_t	*list;
-		int		result;
-
-		list = (ekstat_term_t *)(malloc(sizeof(*list)));
-		if (list == NULL) {
-			ASYNC_NIF_REPLY(enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM));
-			return;
-		}
-
-		if (!args->handle->rwlock) {
-			ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_ERROR, ATOM_CLOSED));
-			return;
-		}
-		(void) enif_rwlock_rlock(args->handle->rwlock);
-		list->term = enif_make_list(env, 0);
-		folder.env = (void *)(env);
-		folder.selector = args->selector;
-		folder.accumulator = (void *)(list);
-		folder.data = NULL;
-		folder.prepare = ekstat_read_prepare;
-		folder.fold = ekstat_read_fold;
-		folder.finalize = ekstat_read_finalize;
-		result = fold_ekstat_context(args->handle->context, &folder);
-		(void) enif_rwlock_runlock(args->handle->rwlock);
-
-		if (result == EKSTAT_OK) {
-			ASYNC_NIF_REPLY(enif_make_tuple(env, 2, ATOM_OK, list->term));
-		} else {
-			if (result == EKSTAT_ENOMEM) {
-				ASYNC_NIF_REPLY(enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM));
-			} else {
-				ASYNC_NIF_REPLY(ATOM_ERROR);
-			}
-		}
-
-		(void) free(list);
-		return;
-	},
-	{ // post
-		(void) free_ks_selector(args->selector);
-		(void) enif_release_resource((void *)(args->handle));
-	}
-);
+char *
+ekstat_strerror(int errnum)
+{
+	return (strerror(errnum));
+}
 
 static int
-ekstat_read_prepare(ekstat_folder_t *folder)
+ekstat_folder_finalize(kstat_folder_t *folder, void **accumulator)
 {
 	ErlNifEnv	*env;
-	ekstat_term_t	*statistics;
+	ekstat_acc_t	*acc;
+	ERL_NIF_TERM	instance;
+	ERL_NIF_TERM	term;
 
-	env = (ErlNifEnv *)(folder->env);
-	statistics = (ekstat_term_t *)(malloc(sizeof(*statistics)));
-	if (statistics == NULL) {
-		return (EKSTAT_ENOMEM);
-	}
-	statistics->term = enif_make_list(env, 0);
-	folder->data = (void *)(statistics);
+	env = (ErlNifEnv *)(folder->data);
+	acc = (ekstat_acc_t *)(*accumulator);
+	instance = enif_make_tuple(
+		env,
+		5,
+		enif_make_string(env, acc->ksi->ks_class, ERL_NIF_LATIN1),
+		enif_make_string(env, acc->ksi->ks_module, ERL_NIF_LATIN1),
+		enif_make_int(env, acc->ksi->ks_instance),
+		enif_make_string(env, acc->ksi->ks_name, ERL_NIF_LATIN1),
+		acc->statistics
+	);
+	term = enif_make_list_cell(env, instance, acc->list);
+	acc->list = term;
+	acc->ksi = NULL;
+
 	return (EKSTAT_OK);
 }
 
 static int
-ekstat_read_fold(ekstat_folder_t *folder, ks_nvpair_t *nvpair)
+ekstat_folder_prepare(kstat_folder_t *folder, ks_instance_t *ksi, void **accumulator)
 {
 	ErlNifEnv	*env;
-	ekstat_term_t	*statistics;
-	ERL_NIF_TERM	term;
+	ekstat_acc_t	*acc;
+
+	env = (ErlNifEnv *)(folder->data);
+	acc = (ekstat_acc_t *)(*accumulator);
+	acc->statistics = enif_make_list(env, 0);
+	acc->ksi = ksi;
+
+	return (EKSTAT_OK);
+}
+
+static int
+ekstat_folder_fold(kstat_folder_t *folder, ks_instance_t *ksi, ks_nvpair_t *nvpair, void **accumulator)
+{
+	ErlNifEnv	*env;
+	ekstat_acc_t	*acc;
 	ERL_NIF_TERM	key;
 	ERL_NIF_TERM	value;
+	ERL_NIF_TERM	term;
 
-	env = (ErlNifEnv *)(folder->env);
-	statistics = (ekstat_term_t *)(folder->data);
-	value = 0;
+	env = (ErlNifEnv *)(folder->data);
+	acc = (ekstat_acc_t *)(*accumulator);
 
 	switch (nvpair->data_type) {
 	case KSTAT_DATA_CHAR:
@@ -416,219 +128,111 @@ ekstat_read_fold(ekstat_folder_t *folder, ks_nvpair_t *nvpair)
 	}
 
 	key = enif_make_string(env, nvpair->name, ERL_NIF_LATIN1);
-	term = enif_make_list_cell(env, enif_make_tuple(env, 2, key, value), statistics->term);
-	statistics->term = term;
+	term = enif_make_list_cell(env, enif_make_tuple(env, 2, key, value), acc->statistics);
+	acc->statistics = term;
 
 	return (EKSTAT_OK);
 }
 
-static int
-ekstat_read_finalize(ekstat_folder_t *folder, ks_instance_t *ksi)
+int
+ekstat_folder(kstat_folder_t *folder, ks_instance_t *ksi, ks_nvpair_t *nvpair, void **accumulator)
 {
-	ErlNifEnv	*env;
-	ekstat_term_t	*statistics;
-	ekstat_term_t	*list;
-	ERL_NIF_TERM	instance;
-	ERL_NIF_TERM	term;
+	/* finalize */
+	if (ksi == NULL && nvpair == NULL) {
+		return (ekstat_folder_finalize(folder, accumulator));
+	}
 
-	env = (ErlNifEnv *)(folder->env);
-	statistics = (ekstat_term_t *)(folder->data);
-	list = (ekstat_term_t *)(folder->accumulator);
-	instance = enif_make_tuple(
-		env,
-		5,
-		enif_make_string(env, ksi->ks_class, ERL_NIF_LATIN1),
-		enif_make_string(env, ksi->ks_module, ERL_NIF_LATIN1),
-		enif_make_int(env, ksi->ks_instance),
-		enif_make_string(env, ksi->ks_name, ERL_NIF_LATIN1),
-		statistics->term
-	);
+	/* prepare */
+	if (nvpair == NULL) {
+		return (ekstat_folder_prepare(folder, ksi, accumulator));
+	}
 
-	term = enif_make_list_cell(env, instance, list->term);
-	list->term = term;
+	/* fold */
+	return (ekstat_folder_fold(folder, ksi, nvpair, accumulator));
+}
 
-	(void) free(statistics);
-	folder->data = NULL;
+static int
+pattern_atom_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr)
+{
+	unsigned	size;
+	char		*atom;
+	int		len;
 
+	(void) enif_get_atom_length(env, arg, &size, ERL_NIF_LATIN1);
+	atom = (char *)(malloc(sizeof (char) * (size + 1)));
+	if (atom == NULL) {
+		if (errno) {
+			return (errno);
+		}
+		return (ENOMEM);
+	}
+	len = enif_get_atom(env, arg, atom, size + 1, ERL_NIF_LATIN1);
+	if (!len) {
+		(void) free(atom);
+		return (-1);
+	}
+	if (strncmp(atom, "_", len) != 0) {
+		(void) free(atom);
+		return (-1);
+	}
+	*pstr = NULL;
+	(void) free(atom);
 	return (EKSTAT_OK);
 }
 
 static int
-parse_selector_pattern(ErlNifEnv *env, ERL_NIF_TERM arg, ks_pattern_t *pattern)
+pattern_list_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr)
+{
+	unsigned	size;
+	char		*string;
+	int		len;
+
+	(void) enif_get_list_length(env, arg, &size);
+	string = (char *)(malloc(sizeof (char) * (size + 1)));
+	if (string == NULL) {
+		if (errno) {
+			return (errno);
+		}
+		return (ENOMEM);
+	}
+	len = enif_get_string(env, arg, string, size + 1, ERL_NIF_LATIN1);
+	if (!len) {
+		(void) free(string);
+		return (-1);
+	}
+	*pstr = string;
+	return (EKSTAT_OK);
+}
+
+static int
+pattern_number_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr)
+{
+	ErlNifSInt64	integer;
+	char		*string;
+
+	if (!enif_get_int64(env, arg, &integer)) {
+		return (-1);
+	}
+	(void) asprintf(&string, "%d", integer);
+	if (string == NULL) {
+		if (errno) {
+			return (errno);
+		}
+		return (ENOMEM);
+	}
+	*pstr = string;
+	return (EKSTAT_OK);
+}
+
+int
+pattern_term_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr)
 {
 	if (enif_is_atom(env, arg)) {
-		unsigned	size;
-		char		*atom;
-		int		len;
-
-		(void) enif_get_atom_length(env, arg, &size, ERL_NIF_LATIN1);
-		atom = (char *)(malloc(sizeof (char) * (size + 1)));
-		if (atom == NULL) {
-			return (EKSTAT_ENOMEM);
-		}
-		len = enif_get_atom(env, arg, atom, size + 1, ERL_NIF_LATIN1);
-		if (!len) {
-			(void) free(atom);
-			return (EKSTAT_BADARG);
-		}
-		if (strncmp(atom, "_", len) != 0) {
-			(void) free(atom);
-			return (EKSTAT_BADARG);
-		}
-		pattern->pstr = "*";
-		pattern->needs_free = B_FALSE;
-		(void) free(atom);
-		return (EKSTAT_OK);
+		return (pattern_atom_to_string(env, arg, pstr));
 	} else if (enif_is_list(env, arg)) {
-		unsigned	size;
-		char		*string;
-		int		len;
-
-		(void) enif_get_list_length(env, arg, &size);
-		string = (char *)(malloc(sizeof (char) * (size + 1)));
-		if (string == NULL) {
-			return (EKSTAT_ENOMEM);
-		}
-		len = enif_get_string(env, arg, string, size + 1, ERL_NIF_LATIN1);
-		if (!len) {
-			(void) free(string);
-			return (EKSTAT_BADARG);
-		}
-		pattern->pstr = string;
-		pattern->needs_free = B_TRUE;
-		return (EKSTAT_OK);
+		return (pattern_list_to_string(env, arg, pstr));
 	} else if (enif_is_number(env, arg)) {
-		ErlNifSInt64	integer;
-		char		*string;
-
-		if (!enif_get_int64(env, arg, &integer)) {
-			return (EKSTAT_BADARG);
-		}
-		(void) asprintf(&string, "%d", integer);
-		if (string == NULL) {
-			return (EKSTAT_ENOMEM);
-		}
-		pattern->pstr = string;
-		pattern->needs_free = B_TRUE;
-		return (EKSTAT_OK);
-	} else {
-		return (EKSTAT_BADARG);
+		return (pattern_number_to_string(env, arg, pstr));
 	}
+	return (-1);
 }
-
-static void
-ekstat_dtor_nif(ErlNifEnv *env, void *obj)
-{
-	ekstat_t	*handle;
-
-	handle = (ekstat_t *)(obj);
-	if (handle == NULL) {
-		return;
-	}
-	if (handle->rwlock) {
-		(void) enif_rwlock_rwlock(handle->rwlock);
-	}
-	if (handle->context) {
-		if (handle->context->control) {
-			(void) kstat_close(handle->context->control);
-			handle->context->control = NULL;
-		}
-		(void) free_ekstat_context(handle->context);
-		handle->context = NULL;
-	}
-	if (handle->rwlock) {
-		(void) enif_rwlock_rwunlock(handle->rwlock);
-		(void) enif_rwlock_destroy(handle->rwlock);
-		handle->rwlock = NULL;
-	}
-}
-
-static int
-ekstat_load_nif(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
-{
-	ErlNifResourceFlags	flags;
-	ekstat_priv_data_t	*priv;
-
-	UNUSED(load_info);
-
-	priv = enif_alloc(sizeof(*priv));
-	if (!priv) {
-		return (ENOMEM);
-	}
-	(void) memset(priv, 0, sizeof(*priv));
-
-	/* Note: !!! the first element of our priv_data struct *must* be the
-	   pointer to the async_nif's private data which we set here. */
-	ASYNC_NIF_LOAD(ekstat, env, priv->async_nif_priv);
-	if (!priv) {
-		return (ENOMEM);
-	}
-	*priv_data = priv;
-
-	ATOM_CLOSED = enif_make_atom(env, "closed");
-	ATOM_ENXIO = enif_make_atom(env, "enxio");
-	ATOM_EOVERFLOW = enif_make_atom(env, "eoverflow");
-
-	flags = (ErlNifResourceFlags)(ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER);
-	ekstat_RESOURCE = enif_open_resource_type(
-		env,
-		NULL,			// module_str: MUST be NULL
-		"ekstat_resource",	// name
-		ekstat_dtor_nif,	// dtor
-		flags,
-		NULL
-	);
-
-	return (0);
-}
-
-static int
-ekstat_reload_nif(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM info)
-{
-	UNUSED(env);
-	UNUSED(priv_data);
-	UNUSED(info);
-	return (0); // TODO: implement
-}
-
-static int
-ekstat_upgrade_nif(ErlNifEnv *env, void **priv_data, void **old_priv_data, ERL_NIF_TERM load_info)
-{
-	UNUSED(priv_data);
-	UNUSED(old_priv_data);
-	UNUSED(load_info);
-	ASYNC_NIF_UPGRADE(ekstat, env); // TODO: implement
-	return 0;
-}
-
-static void
-ekstat_unload_nif(ErlNifEnv *env, void *priv_data)
-{
-	ekstat_priv_data_t	*priv;
-
-	priv = (ekstat_priv_data_t *)priv_data;
-	ASYNC_NIF_UNLOAD(ekstat, env, priv->async_nif_priv);
-	(void) enif_free(priv);
-	return;
-}
-
-static ErlNifFunc nif_funcs [] = {
-	{"open_nif",	1,	ekstat_open},
-	{"close_nif",	2,	ekstat_close},
-	{"clear_nif",	2,	ekstat_clear},
-	{"update_nif",	2,	ekstat_update},
-	{"read_nif",	2,	ekstat_read},
-	{"read_nif",	3,	ekstat_read},
-	{"read_nif",	4,	ekstat_read},
-	{"read_nif",	5,	ekstat_read},
-	{"read_nif",	6,	ekstat_read},
-	{"read_nif",	7,	ekstat_read}
-};
-
-/* driver entry point */
-ERL_NIF_INIT(ekstat,
-	nif_funcs,
-	& ekstat_load_nif,
-	& ekstat_reload_nif,
-	& ekstat_upgrade_nif,
-	& ekstat_unload_nif)

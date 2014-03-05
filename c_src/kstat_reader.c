@@ -44,14 +44,21 @@
  *	-j	json format
  */
 
-#include "stat_kstat.h"
-#include "ekstat_context.c"
+#define KSR_INTERNAL
+#include "kstat_reader.h"
+
+#define CHECK(expr, label)								\
+	if (KSR_OK != (ret = (expr))) {							\
+		DPRINTF("CHECK(\"%s\") failed \"%s\" at %s:%d in %s()\n",		\
+			#expr, strerror(ret), __FILE__, __LINE__, __func__);		\
+		goto label;								\
+	}
 
 /*
  * Sort compare function.
  */
 static int
-compare_instances(ks_instance_t *l_arg, ks_instance_t *r_arg)
+ksr_compare_instances(ks_instance_t *l_arg, ks_instance_t *r_arg)
 {
 	int	cval;
 	int	rval;
@@ -78,120 +85,197 @@ compare_instances(ks_instance_t *l_arg, ks_instance_t *r_arg)
 /*
  * Inserts an instance in the per selector list.
  */
-static void
-nvpair_insert(ks_instance_t *ksi, char *name, ks_value_t *value, uchar_t data_type)
+static int
+ksr_nvpair_insert(ks_instance_t *ksi, char *name, ks_value_t *value, uchar_t data_type)
 {
 	ks_nvpair_t	*instance;
 	ks_nvpair_t	*tmp;
 
-	if (ksi->context->last_error) {
-		return;
-	}
-
 	instance = (ks_nvpair_t *)(malloc(sizeof (ks_nvpair_t)));
 	if (instance == NULL) {
-		ksi->context->last_error = errno;
-		return;
+		if (errno) {
+			return (errno);
+		}
+		return (ENOMEM);
 	}
 	(void) strlcpy(instance->name, name, KSTAT_STRLEN);
 	(void) memcpy(&instance->value, value, sizeof (ks_value_t));
 	instance->data_type = data_type;
 
 	tmp = list_head(&ksi->ks_nvlist);
-	while (tmp != NULL && strcasecmp(instance->name, tmp->name) < 0)
-	tmp = list_next(&ksi->ks_nvlist, tmp);
+	while (tmp != NULL && strcasecmp(instance->name, tmp->name) < 0) {
+		tmp = list_next(&ksi->ks_nvlist, tmp);
+	}
 
 	(void) list_insert_before(&ksi->ks_nvlist, tmp, instance);
+
+	return (KSR_OK);
 }
 
 /*
  * Match a string against a shell glob or extended regular expression.
  */
 static boolean_t
-ks_match(const char *str, ks_pattern_t *pattern)
+ksr_match(const char *str, ks_pattern_t *pattern)
 {
-	int	regcode;
-	char	*regstr;
-	char	*errbuf;
-	size_t	bufsz;
-
-	if (pattern->context->last_error) {
-		return B_FALSE;
-	}
-
-	if (pattern->pstr != NULL && gmatch(pattern->pstr, "/*/") != 0) {
-		/* All regex patterns are strdup'd copies */
-		regstr = pattern->pstr + 1;
-		*(strrchr(regstr, '/')) = '\0';
-
-		regcode = regcomp(&pattern->preg, regstr,
-		    REG_EXTENDED | REG_NOSUB);
-		if (regcode != 0) {
-			bufsz = regerror(regcode, NULL, NULL, 0);
-			if (bufsz != 0) {
-				errbuf = (char *)(malloc(bufsz));
-				if (errbuf == NULL) {
-					pattern->context->last_error = errno;
-					(void) free(pattern->pstr);
-					pattern->pstr = NULL;
-					return B_FALSE;
-				}
-				(void) regerror(regcode, NULL, errbuf, bufsz);
-				pattern->context->last_error = -1;
-				pattern->context->last_error_string = errbuf;
-			}
-			(void) free(pattern->pstr);
-			pattern->pstr = NULL;
-			return B_FALSE;
+	if (pattern) {
+		if (pattern->preg) {
+			return ((regexec(pattern->preg, str, 0, NULL, 0) == 0));
 		}
-
-		(void) free(pattern->pstr);
-		pattern->pstr = NULL;
+		return ((gmatch(str, pattern->pstr) != 0));
 	}
-
-	if (pattern->pstr == NULL) {
-		return (regexec(&pattern->preg, str, 0, NULL, 0) == 0);
-	}
-
-	return ((gmatch(str, pattern->pstr) != 0));
+	return (B_TRUE);
 }
 
 /*
  * Allocates a new all-matching selector.
  */
 static ks_selector_t *
-new_selector(ekstat_context_t *context)
+ksr_new_selector(char **errbuf, char *class, char *module, char *instance, char *name, char *statistic)
 {
 	ks_selector_t	*selector;
 
-	selector = (ks_selector_t *)malloc(sizeof (ks_selector_t));
+	selector = (ks_selector_t *)(malloc(sizeof (ks_selector_t)));
 	if (selector == NULL) {
 		return (NULL);
 	}
 
-	selector->ks_class.pstr = "*";
-	selector->ks_module.pstr = "*";
-	selector->ks_instance.pstr = "*";
-	selector->ks_name.pstr = "*";
-	selector->ks_statistic.pstr = "*";
+	selector->class = NULL;
+	selector->module = NULL;
+	selector->instance = NULL;
+	selector->name = NULL;
+	selector->statistic = NULL;
 
-	selector->ks_class.needs_free = B_FALSE;
-	selector->ks_module.needs_free = B_FALSE;
-	selector->ks_instance.needs_free = B_FALSE;
-	selector->ks_name.needs_free = B_FALSE;
-	selector->ks_statistic.needs_free = B_FALSE;
+	if (class) {
+		selector->class = ksr_new_pattern(errbuf, class);
+		if (selector->class == NULL) {
+			(void) ksr_free_selector(selector);
+			return (NULL);
+		}
+	}
 
-	selector->ks_class.context = context;
-	selector->ks_module.context = context;
-	selector->ks_instance.context = context;
-	selector->ks_name.context = context;
-	selector->ks_statistic.context = context;
+	if (module) {
+		selector->module = ksr_new_pattern(errbuf, module);
+		if (selector->module == NULL) {
+			(void) ksr_free_selector(selector);
+			return (NULL);
+		}
+	}
+
+	if (instance) {
+		selector->instance = ksr_new_pattern(errbuf, instance);
+		if (selector->instance == NULL) {
+			(void) ksr_free_selector(selector);
+			return (NULL);
+		}
+	}
+
+	if (name) {
+		selector->name = ksr_new_pattern(errbuf, name);
+		if (selector->name == NULL) {
+			(void) ksr_free_selector(selector);
+			return (NULL);
+		}
+	}
+
+	if (statistic) {
+		selector->statistic = ksr_new_pattern(errbuf, statistic);
+		if (selector->statistic == NULL) {
+			(void) ksr_free_selector(selector);
+			return (NULL);
+		}
+	}
 
 	return (selector);
 }
 
+static ks_pattern_t *
+ksr_new_pattern(char **errbuf, char *pstr)
+{
+	ks_pattern_t	*pattern;
+	int		regcode;
+	char		*regstr;
+	size_t		bufsz;
+
+	if (pstr == NULL) {
+		return (NULL);
+	}
+
+	pattern = (ks_pattern_t *)(malloc(sizeof (ks_pattern_t)));
+	if (pattern == NULL) {
+		return (NULL);
+	}
+
+	pattern->pstr = NULL;
+	pattern->preg = NULL;
+
+	if (gmatch(pstr, "/*/") != 0) {
+		pattern->preg = (regex_t *)(malloc(sizeof(regex_t)));
+		if (pattern->preg == NULL) {
+			(void) ksr_free_pattern(pattern);
+			return (NULL);
+		}
+
+		/* All regex patterns are strdup'd copies */
+		regstr = pstr + 1;
+		*(strrchr(regstr, '/')) = '\0';
+
+		regcode = regcomp(pattern->preg, regstr, REG_EXTENDED | REG_NOSUB);
+		if (regcode != 0) {
+			bufsz = regerror(regcode, NULL, NULL, 0);
+			if (bufsz != 0) {
+				*errbuf = (char *)(malloc(bufsz));
+				if (*errbuf != NULL) {
+					(void) regerror(regcode, NULL, *errbuf, bufsz);
+				}
+				(void) ksr_free_pattern(pattern);
+				return (NULL);
+			}
+		}
+	} else {
+		pattern->pstr = pstr;
+	}
+
+	return (pattern);
+}
+
+static void
+ksr_free_selector(ks_selector_t *selector)
+{
+	if (selector == NULL) {
+		return;
+	}
+	(void) ksr_free_pattern(selector->class);
+	selector->class = NULL;
+	(void) ksr_free_pattern(selector->module);
+	selector->module = NULL;
+	(void) ksr_free_pattern(selector->instance);
+	selector->instance = NULL;
+	(void) ksr_free_pattern(selector->name);
+	selector->name = NULL;
+	(void) ksr_free_pattern(selector->statistic);
+	selector->statistic = NULL;
+	(void) free(selector);
+}
+
+static void
+ksr_free_pattern(ks_pattern_t *pattern)
+{
+	if (pattern == NULL) {
+		return;
+	}
+	if (pattern->pstr != NULL) {
+		(void) free(pattern->pstr);
+		pattern->pstr = NULL;
+	}
+	if (pattern->preg != NULL) {
+		(void) regfree(pattern->preg);
+	}
+	(void) free(pattern);
+}
+
 static char *
-ks_safe_strdup(char *str)
+ksr_safe_strdup(char *str)
 {
 	char	*dup;
 
@@ -210,39 +294,14 @@ ks_safe_strdup(char *str)
 	return (dup);
 }
 
-static void
-free_pattern(ks_pattern_t *pattern)
-{
-	if (pattern == NULL) {
-		return;
-	}
-	if (pattern->pstr != NULL) {
-		if (pattern->needs_free == B_TRUE) {
-			(void) free(pattern->pstr);
-		}
-		pattern->pstr = NULL;
-	}
-	(void) regfree(&pattern->preg);
-}
-
-static void
-free_selector(ks_selector_t *selector)
-{
-	(void) free_pattern(&selector->ks_class);
-	(void) free_pattern(&selector->ks_module);
-	(void) free_pattern(&selector->ks_instance);
-	(void) free_pattern(&selector->ks_name);
-	(void) free_pattern(&selector->ks_statistic);
-	free(selector);
-}
-
-static void
-save_cpu_stat(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_cpu_stat(kstat_t *kp, ks_instance_t *ksi)
 {
 	cpu_stat_t	*stat;
 	cpu_sysinfo_t	*sysinfo;
 	cpu_syswait_t	*syswait;
 	cpu_vminfo_t	*vminfo;
+	int		ret;
 
 	stat = (cpu_stat_t *)(kp->ks_data);
 	sysinfo = &stat->cpu_sysinfo;
@@ -346,12 +405,15 @@ save_cpu_stat(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_UINT32(ksi, vminfo, fspgin);
 	SAVE_UINT32(ksi, vminfo, fspgout);
 	SAVE_UINT32(ksi, vminfo, fsfree);
+
+	return (KSR_OK);
 }
 
-static void
-save_var(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_var(kstat_t *kp, ks_instance_t *ksi)
 {
 	struct var	*var = (struct var *)(kp->ks_data);
+	int		ret;
 
 	assert(kp->ks_data_size == sizeof (struct var));
 
@@ -370,12 +432,15 @@ save_var(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_INT32(ksi, var, v_maxpmem);
 	SAVE_INT32(ksi, var, v_autoup);
 	SAVE_INT32(ksi, var, v_bufhwm);
+
+	return (KSR_OK);
 }
 
-static void
-save_ncstats(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_ncstats(kstat_t *kp, ks_instance_t *ksi)
 {
 	struct ncstats	*ncstats = (struct ncstats *)(kp->ks_data);
+	int		ret;
 
 	assert(kp->ks_data_size == sizeof (struct ncstats));
 
@@ -387,12 +452,15 @@ save_ncstats(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_INT32(ksi, ncstats, long_look);
 	SAVE_INT32(ksi, ncstats, move_to_front);
 	SAVE_INT32(ksi, ncstats, purges);
+
+	return (KSR_OK);
 }
 
-static void
-save_sysinfo(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_sysinfo(kstat_t *kp, ks_instance_t *ksi)
 {
 	sysinfo_t	*sysinfo = (sysinfo_t *)(kp->ks_data);
+	int		ret;
 
 	assert(kp->ks_data_size == sizeof (sysinfo_t));
 
@@ -402,12 +470,15 @@ save_sysinfo(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_UINT32(ksi, sysinfo, swpque);
 	SAVE_UINT32(ksi, sysinfo, swpocc);
 	SAVE_UINT32(ksi, sysinfo, waiting);
+
+	return (KSR_OK);
 }
 
-static void
-save_vminfo(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_vminfo(kstat_t *kp, ks_instance_t *ksi)
 {
 	vminfo_t	*vminfo = (vminfo_t *)(kp->ks_data);
+	int		ret;
 
 	assert(kp->ks_data_size == sizeof (vminfo_t));
 
@@ -417,12 +488,15 @@ save_vminfo(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_UINT64(ksi, vminfo, swap_avail);
 	SAVE_UINT64(ksi, vminfo, swap_free);
 	SAVE_UINT64(ksi, vminfo, updates);
+
+	return (KSR_OK);
 }
 
-static void
-save_nfs(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_nfs(kstat_t *kp, ks_instance_t *ksi)
 {
 	struct mntinfo_kstat *mntinfo = (struct mntinfo_kstat *)(kp->ks_data);
+	int	ret;
 
 	assert(kp->ks_data_size == sizeof (struct mntinfo_kstat));
 
@@ -451,14 +525,17 @@ save_nfs(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_UINT32(ksi, mntinfo, mik_failover);
 	SAVE_UINT32(ksi, mntinfo, mik_remap);
 	SAVE_STRING(ksi, mntinfo, mik_curserver);
+
+	return (KSR_OK);
 }
 
 #ifdef __sparc
-static void
-save_sfmmu_global_stat(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_sfmmu_global_stat(kstat_t *kp, ks_instance_t *ksi)
 {
 	struct sfmmu_global_stat *sfmmug =
 	    (struct sfmmu_global_stat *)(kp->ks_data);
+	int	ret;
 
 	assert(kp->ks_data_size == sizeof (struct sfmmu_global_stat));
 
@@ -523,14 +600,17 @@ save_sfmmu_global_stat(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_INT32(ksi, sfmmug, sf_join_scd);
 	SAVE_INT32(ksi, sfmmug, sf_leave_scd);
 	SAVE_INT32(ksi, sfmmug, sf_destroy_scd);
+
+	return (KSR_OK);
 }
 #endif
 
 #ifdef __sparc
-static void
-save_sfmmu_tsbsize_stat(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_sfmmu_tsbsize_stat(kstat_t *kp, ks_instance_t *ksi)
 {
 	struct sfmmu_tsbsize_stat *sfmmut;
+	int	ret;
 
 	assert(kp->ks_data_size == sizeof (struct sfmmu_tsbsize_stat));
 	sfmmut = (struct sfmmu_tsbsize_stat *)(kp->ks_data);
@@ -545,17 +625,20 @@ save_sfmmu_tsbsize_stat(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_INT32(ksi, sfmmut, sf_tsbsz_1m);
 	SAVE_INT32(ksi, sfmmut, sf_tsbsz_2m);
 	SAVE_INT32(ksi, sfmmut, sf_tsbsz_4m);
+
+	return (KSR_OK);
 }
 #endif
 
 #ifdef __sparc
-static void
-save_simmstat(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_simmstat(kstat_t *kp, ks_instance_t *ksi)
 {
 	uchar_t	*simmstat;
 	char	*simm_buf;
 	char	*list = NULL;
 	int	i;
+	int	ret;
 
 	assert(kp->ks_data_size == sizeof (uchar_t) * SIMM_COUNT);
 
@@ -574,6 +657,8 @@ save_simmstat(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_STRING_X(ksi, "status", simm_buf);
 	free(list);
 	free(simm_buf);
+
+	return (KSR_OK);
 }
 #endif
 
@@ -582,7 +667,7 @@ save_simmstat(kstat_t *kp, ks_instance_t *ksi)
  * Helper function for save_temperature().
  */
 static char *
-short_array_to_string(short *shortp, int len)
+ksr_short_array_to_string(short *shortp, int len)
 {
 	char	*list = NULL;
 	char	*list_buf;
@@ -602,11 +687,12 @@ short_array_to_string(short *shortp, int len)
 	return (list_buf);
 }
 
-static void
-save_temperature(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_temperature(kstat_t *kp, ks_instance_t *ksi)
 {
 	struct temp_stats *temps = (struct temp_stats *)(kp->ks_data);
 	char	*buf;
+	int	ret;
 
 	assert(kp->ks_data_size == sizeof (struct temp_stats));
 
@@ -640,29 +726,35 @@ save_temperature(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_INT32(ksi, temps, version);
 	SAVE_INT32(ksi, temps, trend);
 	SAVE_INT32(ksi, temps, override);
+
+	return (KSR_OK);
 }
 #endif
 
 #ifdef __sparc
-static void
-save_temp_over(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_temp_over(kstat_t *kp, ks_instance_t *ksi)
 {
 	short	*sh = (short *)(kp->ks_data);
 	char	*value;
+	int	ret;
 
 	assert(kp->ks_data_size == sizeof (short));
 
 	(void) asprintf(&value, "%hu", *sh);
 	SAVE_STRING_X(ksi, "override", value);
 	free(value);
+
+	return (KSR_OK);
 }
 #endif
 
 #ifdef __sparc
-static void
-save_ps_shadow(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_ps_shadow(kstat_t *kp, ks_instance_t *ksi)
 {
 	uchar_t	*uchar = (uchar_t *)(kp->ks_data);
+	int	ret;
 
 	assert(kp->ks_data_size == SYS_PS_COUNT);
 
@@ -685,16 +777,19 @@ save_ps_shadow(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_CHAR_X(ksi, "v3_pch", *uchar++);
 	SAVE_CHAR_X(ksi, "v5_pch", *uchar++);
 	SAVE_CHAR_X(ksi, "p_fan", *uchar++);
+
+	return (KSR_OK);
 }
 #endif
 
 #ifdef __sparc
-static void
-save_fault_list(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_fault_list(kstat_t *kp, ks_instance_t *ksi)
 {
 	struct ft_list *fault;
 	char	name[KSTAT_STRLEN + 7];
 	int	i;
+	int	ret;
 
 	for (i = 1, fault = (struct ft_list *)(kp->ks_data);
 	    i <= 999999 && i <= kp->ks_data_size / sizeof (struct ft_list);
@@ -710,14 +805,17 @@ save_fault_list(kstat_t *kp, ks_instance_t *ksi)
 		(void) snprintf(name, sizeof (name), "msg_%d", i);
 		SAVE_STRING_X(ksi, name, fault->msg);
 	}
+
+	return (KSR_OK);
 }
 #endif
 
-static void
-save_named(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_named(kstat_t *kp, ks_instance_t *ksi)
 {
 	kstat_named_t *knp;
 	int	n;
+	int	ret;
 
 	for (n = kp->ks_ndata, knp = KSTAT_NAMED_PTR(kp); n > 0; n--, knp++) {
 		switch (knp->data_type) {
@@ -749,24 +847,30 @@ save_named(kstat_t *kp, ks_instance_t *ksi)
 			break;
 		}
 	}
+
+	return (KSR_OK);
 }
 
-static void
-save_intr(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_intr(kstat_t *kp, ks_instance_t *ksi)
 {
 	kstat_intr_t *intr = KSTAT_INTR_PTR(kp);
 	char	*intr_names[] = {"hard", "soft", "watchdog", "spurious",
 	    "multiple_service"};
 	int	n;
+	int	ret;
 
 	for (n = 0; n < KSTAT_NUM_INTRS; n++)
 		SAVE_UINT32_X(ksi, intr_names[n], intr->intrs[n]);
+
+	return (KSR_OK);
 }
 
-static void
-save_io(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_io(kstat_t *kp, ks_instance_t *ksi)
 {
 	kstat_io_t	*ksio = KSTAT_IO_PTR(kp);
+	int		ret;
 
 	SAVE_UINT64(ksi, ksio, nread);
 	SAVE_UINT64(ksi, ksio, nwritten);
@@ -780,12 +884,15 @@ save_io(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_HRTIME(ksi, ksio, rlastupdate);
 	SAVE_UINT32(ksi, ksio, wcnt);
 	SAVE_UINT32(ksi, ksio, rcnt);
+
+	return (KSR_OK);
 }
 
-static void
-save_timer(kstat_t *kp, ks_instance_t *ksi)
+static int
+ksr_save_timer(kstat_t *kp, ks_instance_t *ksi)
 {
 	kstat_timer_t	*ktimer = KSTAT_TIMER_PTR(kp);
+	int		ret;
 
 	SAVE_STRING(ksi, ktimer, name);
 	SAVE_UINT64(ksi, ktimer, num_events);
@@ -794,6 +901,29 @@ save_timer(kstat_t *kp, ks_instance_t *ksi)
 	SAVE_HRTIME(ksi, ktimer, max_time);
 	SAVE_HRTIME(ksi, ktimer, start_time);
 	SAVE_HRTIME(ksi, ktimer, stop_time);
+
+	return (KSR_OK);
+}
+
+static int
+ksr_save_hrtimes(kstat_t *kp, ks_instance_t *ksi)
+{
+	int	ret;
+
+	SAVE_HRTIME_X(ksi, "crtime", kp->ks_crtime);
+	SAVE_HRTIME_X(ksi, "snaptime", kp->ks_snaptime);
+
+	return (KSR_OK);
+}
+
+static int
+ksr_save_error(int errnum, ks_instance_t *ksi)
+{
+	int	ret;
+
+	SAVE_STRING_X(ksi, "error", strerror(errnum));
+
+	return (KSR_OK);
 }
 
 /*
@@ -801,7 +931,7 @@ save_timer(kstat_t *kp, ks_instance_t *ksi)
  * see for further comments there.
  */
 static kstat_raw_reader_t
-lookup_raw_kstat_fn(char *module, char *name)
+ksr_lookup_raw_kstat_fn(char *module, char *name)
 {
 	char		key[KSTAT_STRLEN * 2];
 	register char 	*f, *t;
@@ -828,4 +958,272 @@ lookup_raw_kstat_fn(char *module, char *name)
 	}
 
 	return (0);
+}
+
+/*
+ * Public functions
+ */
+
+kstat_reader_t *
+new_kstat_reader(kstat_ctl_t *control)
+{
+	kstat_reader_t	*reader;
+
+	reader = (kstat_reader_t *)(malloc(sizeof (kstat_reader_t)));
+	if (reader == NULL) {
+		return (NULL);
+	}
+
+	reader->kid = -1;
+	reader->control = control;
+	(void) list_create(&reader->cache, sizeof (ks_instance_t), offsetof(ks_instance_t, ks_next));
+
+	return (reader);
+}
+
+int
+clear_kstat_reader(kstat_reader_t *reader, unsigned int *count)
+{
+	ks_instance_t	*ksi, *ktmp;
+	ks_nvpair_t	*nvpair, *ntmp;
+
+	ksi = list_head(&reader->cache);
+	while (ksi != NULL) {
+		nvpair = list_head(&ksi->ks_nvlist);
+		while (nvpair != NULL) {
+			ntmp = nvpair;
+			nvpair = list_next(&ksi->ks_nvlist, nvpair);
+			(void) list_remove(&ksi->ks_nvlist, ntmp);
+			if (ntmp->data_type == KSTAT_DATA_STRING) {
+				(void) free(ntmp->value.str.addr.ptr);
+			}
+			(void) free(ntmp);
+		}
+
+		ktmp = ksi;
+		ksi = list_next(&reader->cache, ksi);
+		(void) list_remove(&reader->cache, ktmp);
+		(void) list_destroy(&ktmp->ks_nvlist);
+		(void) free(ktmp);
+
+		if (count) {
+			(*count)++;
+		}
+	}
+
+	return (KSR_OK);
+}
+
+int
+update_kstat_reader(kstat_reader_t *reader)
+{
+	kid_t	kid;
+
+	kid = kstat_chain_update(reader->control);
+
+	if (kid == 0 && reader->kid != -1) {
+		return (KSR_OK);
+	}
+
+	if (kid == -1) {
+		return (errno);
+	}
+
+	reader->kid = kid;
+
+	return (KSR_OK);
+}
+
+int
+load_kstat_reader(kstat_reader_t *reader, unsigned int *count)
+{
+	kstat_t			*kp;
+	kid_t			kid;
+	ks_instance_t		*ksi, *ktmp;
+	kstat_raw_reader_t	ksr_save_raw = NULL;
+	int			ret;
+
+	for (kp = reader->control->kc_chain; kp != NULL; kp = kp->ks_next) {
+		/* Don't bother storing the kstat headers */
+		if (strncmp(kp->ks_name, "kstat_", 6) == 0) {
+			continue;
+		}
+
+		/* Don't bother storing raw stats we don't understand */
+		if (kp->ks_type == KSTAT_TYPE_RAW) {
+			ksr_save_raw = ksr_lookup_raw_kstat_fn(kp->ks_module, kp->ks_name);
+			if (ksr_save_raw == NULL) {
+				continue;
+			}
+		}
+
+		/*
+		 * Allocate a new instance and fill in the values
+		 * we know so far.
+		 */
+		ksi = (ks_instance_t *)(malloc(sizeof (ks_instance_t)));
+		if (ksi == NULL) {
+			(void) clear_kstat_reader(reader, NULL);
+			if (errno) {
+				return (errno);
+			}
+			return (ENOMEM);
+		}
+
+		(void) list_link_init(&ksi->ks_next);
+
+		(void) strlcpy(ksi->ks_module, kp->ks_module, KSTAT_STRLEN);
+		(void) strlcpy(ksi->ks_name, kp->ks_name, KSTAT_STRLEN);
+		(void) strlcpy(ksi->ks_class, kp->ks_class, KSTAT_STRLEN);
+
+		ksi->ks_instance = kp->ks_instance;
+		ksi->ks_snaptime = kp->ks_snaptime;
+		ksi->ks_type = kp->ks_type;
+
+		(void) list_create(&ksi->ks_nvlist, sizeof (ks_nvpair_t), offsetof(ks_nvpair_t, nv_next));
+
+		CHECK(ksr_save_hrtimes(kp, ksi), err1);
+
+		/* Insert this instance into a sorted list */
+		ktmp = list_head(&reader->cache);
+		while (ktmp != NULL && ksr_compare_instances(ksi, ktmp) < 0) {
+			ktmp = list_next(&reader->cache, ktmp);
+		}
+
+		(void) list_insert_before(&reader->cache, ktmp, ksi);
+
+		/* Read the actual statistics */
+		kid = kstat_read(reader->control, kp, NULL);
+		if (kid == -1) {
+			/*
+			 * It is deeply annoying, but some kstats can return errors
+			 * under otherwise routine conditions.  (ACPI is one
+			 * offender; there are surely others.)  To prevent these
+			 * fouled kstats from completely ruining our day, we assign
+			 * an "error" member to the return value that consists of
+			 * the strerror().
+			 */
+			CHECK(ksr_save_error(errno, ksi), err1);
+			if (count) {
+				(*count)++;
+			}
+			continue;
+		}
+
+		switch (kp->ks_type) {
+		case KSTAT_TYPE_RAW:
+			CHECK(ksr_save_raw(kp, ksi), err1);
+			break;
+		case KSTAT_TYPE_NAMED:
+			CHECK(ksr_save_named(kp, ksi), err1);
+			break;
+		case KSTAT_TYPE_INTR:
+			CHECK(ksr_save_intr(kp, ksi), err1);
+			break;
+		case KSTAT_TYPE_IO:
+			CHECK(ksr_save_io(kp, ksi), err1);
+			break;
+		case KSTAT_TYPE_TIMER:
+			CHECK(ksr_save_timer(kp, ksi), err1);
+			break;
+		default:
+			assert(B_FALSE); /* Invalid type */
+			break;
+		}
+
+		if (count) {
+			(*count)++;
+		}
+	}
+
+	return (KSR_OK);
+
+err1:
+	(void) clear_kstat_reader(reader, NULL);
+	return (ret);
+}
+
+int
+fold_kstat_reader(kstat_reader_t *reader, kstat_folder_t *folder, void **accumulator)
+{
+	ks_instance_t	*ksi;
+	ks_nvpair_t	*nvpair;
+	char		*ks_number;
+	int		matched;
+	int		result;
+
+	/* Iterate over each instance */
+	for (ksi = list_head(&reader->cache); ksi != NULL; ksi = list_next(&reader->cache, ksi)) {
+		result = 0;
+		matched = 0;
+
+		(void) asprintf(&ks_number, "%d", ksi->ks_instance);
+		if (ks_number == NULL) {
+			if (errno) {
+				return (errno);
+			}
+			return (ENOMEM);
+		}
+		if (!(ksr_match(ksi->ks_module, folder->selector->module) &&
+				ksr_match(ksi->ks_name, folder->selector->name) &&
+				ksr_match(ks_number, folder->selector->instance) &&
+				ksr_match(ksi->ks_class, folder->selector->class))) {
+			(void) free(ks_number);
+			continue;
+		}
+
+		(void) free(ks_number);
+
+		/* Finally iterate over each statistic */
+		for (nvpair = list_head(&ksi->ks_nvlist); nvpair != NULL; nvpair = list_next(&ksi->ks_nvlist, nvpair)) {
+			if (!ksr_match(nvpair->name, folder->selector->statistic)) {
+				continue;
+			}
+
+			if (matched == 0) {
+				result = folder->fold(folder, ksi, NULL, accumulator);
+				if (result != KSR_OK) {
+					return (result);
+				}
+			}
+
+			matched = 1;
+			result = folder->fold(folder, ksi, nvpair, accumulator);
+			if (result != KSR_OK) {
+				return (result);
+			}
+		}
+
+		if (matched == 1) {
+			result = folder->fold(folder, NULL, NULL, accumulator);
+			if (result != KSR_OK) {
+				return (result);
+			}
+		}
+	}
+
+	return (KSR_OK);
+}
+
+void
+free_kstat_reader(kstat_reader_t *reader)
+{
+	if (reader == NULL) {
+		return;
+	}
+	(void) clear_kstat_reader(reader, NULL);
+	reader->control = NULL;
+	(void) free(reader);
+}
+
+ks_selector_t *
+new_kstat_reader_selector(char **errbuf, char *class, char *module, char *instance, char *name, char *statistic)
+{
+	return (ksr_new_selector(errbuf, class, module, instance, name, statistic));
+}
+
+void
+free_kstat_reader_selector(ks_selector_t *selector)
+{
+	(void) ksr_free_selector(selector);
 }
