@@ -1,5 +1,11 @@
 # ekstat
-ekstat is a interface to the solaris libkstat, it started out as a port of [node-kstat](https://github.com/bcantrill/node-kstat) and later was rewritten using parts of the [C version of the kstat command line utility](https://github.com/illumos/illumos-gate/tree/861bfc8941f2c557f1bcb7a6d7f62f9da98ee4db/usr/src/cmd/stat/kstat).
+
+ekstat is a read-only interface to the solaris/illumos [libkstat(3lib)](http://illumos.org/man/3LIB/libkstat).
+
+## Implementation
+
+ * ekstat is implemented as an asynchronous Erlang NIF which uses [`async_nif.h`](https://gist.github.com/gburd/4121795).
+ * Although it started out as a port of [node-kstat](https://github.com/bcantrill/node-kstat), it was later rewritten using parts of the [C version of the kstat command line utility](https://github.com/illumos/illumos-gate/tree/9736aecd323ba323a24c159dc877b29795d68a0a/usr/src/cmd/stat/kstat).
 
 ## exports
 The interface is rather simple it has 4 functions:
@@ -10,16 +16,22 @@ Simply returns a new kstat handle.
 {ok, Handle} = ekstat:open().
 ```
 
-### `update/1`
-Creates a new snapshot for the handle.
+### `close/1`
+Clears the snapshot and closes the kstat handle.
 ```erlang
-{ok, NumberOfInstancesUpdated} = ekstat:update(Handle).
+ok = ekstat:close(Handle).
 ```
 
 ### `clear/1`
 Clears the snapshot for the handle.
 ```erlang
 {ok, NumberOfInstancesCleared} = ekstat:clear(Handle).
+```
+
+### `update/1`
+Creates a new snapshot for the handle.
+```erlang
+{ok, NumberOfInstancesUpdated} = ekstat:update(Handle).
 ```
 
 ### `read/1,2,3,4,5,6`
@@ -82,5 +94,5 @@ Invalid regular expressions will return an error:
 
 ```erlang
 Error = ekstat:read(Handle, "/*/").
-Error = {error,{kstat,"repetition-operator operand invalid"}}.
+Error = {error,{regerror,"repetition-operator operand invalid"}}.
 ```
