@@ -6,5 +6,8 @@
         kernel,
         stdlib
     ]},
-    {env, []}
+    {env, []},
+    {contributors, ["Heinz N. Gies", "Andrew Bennett"]},
+    {licenses, ["CDDL"]},
+    {links, [{"Github", "https://github.com/Licenser/ekstat"}]}
 ]}.
