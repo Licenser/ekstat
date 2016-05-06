@@ -1,3 +1,13 @@
+## 0.3.0 - 5 March, 2014
+
+* Add `ekstat:close/1`.
+
+* Rewrite NIF to use [`async_nif.h`](https://gist.github.com/gburd/4121795).
+
+## 0.2.2 - 24 October, 2013
+
+* Fix a tiny issue when compiling ekstat.c with -Wmaybe-uninitialized.
+
 ## 0.2.1 - 30 July, 2013
 
 * Fixed memory leak with the `ks_selector_t` and `ks_pattern_t` part of the NIF.

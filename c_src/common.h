@@ -27,43 +27,47 @@
  * Copyright 2014 Pagoda Box, Inc.  All rights reserved.
  */
 
-#ifndef _EKSTAT_H
-#define	_EKSTAT_H
+#ifndef _COMMON_H
+#define	_COMMON_H
 
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <kstat.h>
+#include <langinfo.h>
+#include <libgen.h>
+#include <limits.h>
+#include <locale.h>
+#include <signal.h>
+#include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
-#include <errno.h>
-#include <sys/param.h>
-#include <poll.h>
-#include <erl_nif.h>
-#include <erl_driver.h>
+#include <strings.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/list.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <regex.h>
 
-#include "common.h"
-#include "kstat_reader.h"
+// #define DEBUG 1
+#if !(__STDC_VERSION__ >= 199901L || defined(__GNUC__))
+# undef  DEBUG
+# define DEBUG		0
+# define DPRINTF	(void)	/* Vararg macros may be unsupported */
+#elif DEBUG
+#include <stdio.h>
+#include <stdarg.h>
+#define DPRINTF(fmt, ...)									\
+	do {											\
+		(void) fprintf(stderr, "%s:%d " fmt "\n", __FILE__, __LINE__, __VA_ARGS__);	\
+		(void) fflush(stderr);								\
+	} while(0)
+#define DPUTS(arg)		DPRINTF("%s", arg)
+#else
+#define DPRINTF(fmt, ...)	((void) 0)
+#define DPUTS(arg)		((void) 0)
+#endif
 
-#define EKSTAT_OK	0
-
-typedef struct ekstat_priv_data_s {
-	void		*async_nif_priv;	// Note: must be first element in struct
-} ekstat_priv_data_t;
-
-typedef struct ekstat_s {
-	kstat_reader_t	*reader;
-	ErlNifRWLock	*rwlock;
-} ekstat_t;
-
-typedef struct ekstat_acc_s {
-	ERL_NIF_TERM	list;
-	ERL_NIF_TERM	statistics;
-	ks_instance_t	*ksi;
-} ekstat_acc_t;
-
-extern char	*ekstat_strerror(int errnum);
-extern int	ekstat_folder(kstat_folder_t *folder, ks_instance_t *ksi, ks_nvpair_t *nvpair, void **accumulator);
-extern int	pattern_term_to_string(ErlNifEnv *env, ERL_NIF_TERM arg, char **pstr);
-
-#endif /* _EKSTAT_H */
+#endif /* _COMMON_H */

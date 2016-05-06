@@ -56,6 +56,7 @@ end_per_group(test_kstat, Config) ->
     Stats = ?config(stats, Config),
     {ok, Stats} = ekstat:clear(KStat),
     ct:log("cleared ~p statistics", [Stats]),
+    ok = ekstat:close(KStat),
     ok.
 
 %%====================================================================
@@ -71,7 +72,7 @@ read_1(Config) ->
 read_2(Config) ->
     KStat = ?config(kstat, Config),
     Stats = ?config(stats, Config),
-    {error, {kstat, "repetition-operator operand invalid"}} = ekstat:read(KStat, "/*/"),
+    {error, {regerror, "repetition-operator operand invalid"}} = ekstat:read(KStat, "/*/"),
     Stats = length(ekstat:read(KStat, '_')),
     Stats = length(ekstat:read(KStat, "*")),
     [] = ekstat:read(KStat, "__unknown__"),
@@ -80,7 +81,7 @@ read_2(Config) ->
 read_3(Config) ->
     KStat = ?config(kstat, Config),
     Stats = ?config(stats, Config),
-    {error, {kstat, "repetition-operator operand invalid"}} = ekstat:read(KStat, '_', "/*/"),
+    {error, {regerror, "repetition-operator operand invalid"}} = ekstat:read(KStat, '_', "/*/"),
     Stats = length(ekstat:read(KStat, '_', '_')),
     Stats = length(ekstat:read(KStat, "*", "*")),
     [] = ekstat:read(KStat, '_', "__unknown__"),
@@ -89,7 +90,7 @@ read_3(Config) ->
 read_4(Config) ->
     KStat = ?config(kstat, Config),
     Stats = ?config(stats, Config),
-    {error, {kstat, "repetition-operator operand invalid"}} = ekstat:read(KStat, '_', '_', "/*/"),
+    {error, {regerror, "repetition-operator operand invalid"}} = ekstat:read(KStat, '_', '_', "/*/"),
     Stats = length(ekstat:read(KStat, '_', '_', '_')),
     Stats = length(ekstat:read(KStat, "*", "*", "*")),
     [] = ekstat:read(KStat, '_', '_', "__unknown__"),
@@ -98,7 +99,7 @@ read_4(Config) ->
 read_5(Config) ->
     KStat = ?config(kstat, Config),
     Stats = ?config(stats, Config),
-    {error, {kstat, "repetition-operator operand invalid"}} = ekstat:read(KStat, '_', '_', '_', "/*/"),
+    {error, {regerror, "repetition-operator operand invalid"}} = ekstat:read(KStat, '_', '_', '_', "/*/"),
     Stats = length(ekstat:read(KStat, '_', '_', '_', '_')),
     Stats = length(ekstat:read(KStat, "*", "*", "*", "*")),
     [] = ekstat:read(KStat, '_', '_', '_', "__unknown__"),
@@ -107,7 +108,7 @@ read_5(Config) ->
 read_6(Config) ->
     KStat = ?config(kstat, Config),
     Stats = ?config(stats, Config),
-    {error, {kstat, "repetition-operator operand invalid"}} = ekstat:read(KStat, '_', '_', '_', '_', "/*/"),
+    {error, {regerror, "repetition-operator operand invalid"}} = ekstat:read(KStat, '_', '_', '_', '_', "/*/"),
     Stats = length(ekstat:read(KStat, '_', '_', '_', '_', '_')),
     Stats = length(ekstat:read(KStat, "*", "*", "*", "*", "*")),
     [] = ekstat:read(KStat, '_', '_', '_', '_', "__unknown__"),
